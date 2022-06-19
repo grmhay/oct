@@ -26,7 +26,7 @@ Call the launch_prerun() function.
 
 --provision-infrastructure
 
-Calls the provision_cluster_infrastructure() function. This flag should be accompanied by the --template-name, --library, --cluster-name, --cluster-folder, --network-name, --installation-folder, --master-node-count, and --worker-node-count flags with their appropriate values.
+Calls the provision_cluster_infrastructure() function. This flag should be accompanied by the --template-name, --library, --cluster-name, --cluster-folder, --network-name, --installation-folder, --master-node-count, and --worker-node-count flags with their appropriate values. Optionally the static-mac-addresses if you use them to DHCP IPs in the network.
 
 --destroy
 
@@ -259,6 +259,34 @@ while :; do
                                 die 'ERROR: "--ipcfg" requires a non-empty option argument.'
                         fi
                         ;;
+		--static-mac-addresses)
+						if [ "$2" ]; then
+								static_mac_addresses=$2
+								
+								# Horrible hack - Now I can't get the hash array to pass in so we reset the array here for now again
+								unset static_mac_addresses
+
+								declare -A static_mac_addresses
+								static_mac_addresses[bootstrap]="00:50:56:af:51:a9"
+								static_mac_addresses[master-1]="00:50:56:af:88:a3"
+								static_mac_addresses[master-2]="00:50:56:af:c3:10"
+								static_mac_addresses[master-3]="00:50:56:af:ca:59"
+								static_mac_addresses[worker-1]="00:50:56:af:82:5f"
+								static_mac_addresses[worker-2]="00:50:56:af:6b:cb"
+								static_mac_addresses[worker-3]="00:50:56:af:68:1f"
+
+								echo ""
+								echo "----- We have this configuration for MAC addresses"
+								for key in "${!static_mac_addresses[@]}"
+									do
+										echo -n "hostname  : $key, "
+										echo "MAC Addresses: ${static_mac_addresses[$key]}"
+								done
+								shift
+						else
+								die 'ERROR: "--static-mac-addresses" requires a non-empty option argument.'
+						fi
+						;;
 		--boot)
                         boot_vm=1
                         ;;
@@ -403,6 +431,10 @@ launch_prerun() {
 	bin/openshift-install create manifests --dir=$(pwd)
 	rm -f openshift/99_openshift-cluster-api_master-machines-*.yaml openshift/99_openshift-cluster-api_worker-machineset-*.yaml
 	sed -i -e s/true/false/g manifests/cluster-scheduler-02-config.yml
+	# Back up the manifests and openshift directories for debugging issues
+	cp -r ./manifests ./manifests.bak
+	cp -r ./openshift ./openshift.bak
+	
 	bin/openshift-install create ignition-configs --dir=$(pwd)
 	# Change timeouts for Master
 	sed -i "s/\"timeouts\":{}/\"timeouts\":{\"httpResponseHeaders\":50,\"httpTotal\":600}/g" master.ign
@@ -462,6 +494,7 @@ provision_cluster_infrastructure(){
 	echo "Installation Folder: ${installation_folder}"
 
 	# Create the bootstrap node
+	# Note: vm_mac was already present in deploy_node code so just using it again!
 	echo "Creating a bootstrap node with ${bootstrap_cpu} cpus and ${bootstrap_memory} MB of memory"
 	vm_name="bootstrap.${cluster_name}"
 	vm_cpu="${bootstrap_cpu}"
@@ -470,7 +503,15 @@ provision_cluster_infrastructure(){
 	vm_name="bootstrap.${cluster_name}"
 	ignition_file_path="${installation_folder}/append-bootstrap.ign"
 
+    vm_mac="${static_mac_addresses[bootstrap]}"
+
+	echo ""
+	echo "-----Deploying bootstrap node with MAC ${vm_mac}"
+	echo ""
+
+	
 	deploy_node
+
 
 	# Create the master nodes
 	echo "Creating ${master_node_count} master nodes with ${master_cpu} cpus and ${master_memory} MB of memory"
@@ -479,8 +520,15 @@ provision_cluster_infrastructure(){
 	vm_disk="${master_disk}"
 	ignition_file_path="${installation_folder}/master.ign"
 
-	for (( i=0; i<${master_node_count}; i++ )); do
+	# Changed the logic here as I like my node names to start at 1
+	for (( i=1; i<=${master_node_count}; i++ )); do
 		vm_name="master-${i}.${cluster_name}"
+		vm_mac="${static_mac_addresses["master-"${i}]}"
+		echo ""
+		#echo "-----Deploying master node ${vm_name} with MAC ${vm_mac}"
+		#echo ""
+		#echo " Terminating script here for debug"
+		#exit
 		deploy_node
 	done
 
@@ -491,9 +539,16 @@ provision_cluster_infrastructure(){
 	vm_disk="${worker_disk}"
 	ignition_file_path="${installation_folder}/worker.ign"
 
-	for (( i=0; i<${worker_node_count}; i++ )); do
+	# Changed the logic here as I like my node names to start at 1
+	for (( i=1; i<=${worker_node_count}; i++ )); do
 		vm_name="worker-${i}.${cluster_name}"
+		vm_mac="${static_mac_addresses["worker-"${i}]}"
+		echo ""
+		echo "-----Deploying worker node ${vm_name} with MAC ${vm_mac}"
+		echo ""
+
 		deploy_node
+		
 	done
 }	
 
@@ -508,16 +563,16 @@ destroy_cluster() {
 	if [[ "${response}" == "${cluster_name}" ]]; then
 		echo "Destroying cluster: ${cluster_name}"
 		# Destroy the master nodes
-
-		for (( i=0; i<${master_node_count}; i++ )); do
+		# I like my nodes to start at 1
+		for (( i=1; i<=${master_node_count}; i++ )); do
 			vm="master-${i}.${cluster_name}"
 			echo "master: $vm"
 			govc vm.destroy $vm
 		done
 
 		# Destroy the worker nodes
-
-		for (( i=0; i<${worker_node_count}; i++ )); do
+		# I like my nodes to start at 1
+		for (( i=1; i<=${worker_node_count}; i++ )); do
 			vm="worker-${i}.${cluster_name}"
 			govc vm.destroy $vm
 		done
@@ -543,14 +598,14 @@ manage_cluster_power() {
 
 	# Manage power for the master nodes
 
-	for (( i=0; i<${master_node_count}; i++ )); do
+	for (( i=1; i<=${master_node_count}; i++ )); do
 		vm="master-${i}.${cluster_name}"
 		govc vm.power -${cluster_power_action} "${vm}"
 	done
 
 	# Manage power for the worker nodes
 
-	for (( i=0; i<${worker_node_count}; i++ )); do
+	for (( i=1; i<=${worker_node_count}; i++ )); do
 		vm="worker-${i}.${cluster_name}"
 		govc vm.power -${cluster_power_action} "${vm}"
 	done
@@ -607,3 +662,16 @@ fi
 if [ ! -z ${query_fcos} ]; then
         query_fcos_stream
 fi
+
+confirm() {
+    # call with a prompt string or use a default
+    read -r -p "${1:-Do you want to continue? [y/N]} " response
+    case "$response" in
+        [yY][eE][sS]|[yY]) 
+            continue
+            ;;
+        *)
+            exit 0
+            ;;
+    esac
+}

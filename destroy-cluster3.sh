@@ -25,3 +25,8 @@ okd_tools_release="4.10"
 # Destroy the cluster
 
 ./oct.sh --destroy --cluster-name "${cluster_name}" --master-node-count ${masters_count} --worker-node-count ${workers_count}
+
+rm master.ign bootstrap.ign worker.ign
+
+rm -r ./manifests.bak
+rm -r ./openshift.bak
